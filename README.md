@@ -1,1 +1,1 @@
-# C++ Shopping List App
+# C++ Reminder List App
