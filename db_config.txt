@@ -1,0 +1,4 @@
+host=127.0.0.1
+user=reminder_user
+password=Secure_Password123!!
+database=reminder_app
