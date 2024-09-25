@@ -7,25 +7,22 @@
 #include <fstream>
 
 // mysql headers
-#include <mysql_driver.h>
-#include <mysql_connection.h>
-#include <cppconn/statement.h>
-#include <cppconn/resultset.h>
-#include <cppconn/prepared_statement.h>
+#include <mysqlx/xdevapi.h>
 
 using namespace std;
+using namespace mysqlx;
 
 // Function to load configuration file into a map
-map<string, string> loadConfig(const string& filename) {
+map<std::string, std::string> loadConfig(const std::string& filename) {
     ifstream file(filename);
-    map<string, string> config;
-    string line;
+    map<std::string, std::string> config;
+    std::string line;
 
     while (getline(file, line)) {
         size_t delimiter_pos = line.find('=');
-        if (delimiter_pos != string::npos) {
-            string key = line.substr(0, delimiter_pos);
-            string value = line.substr(delimiter_pos + 1);
+        if (delimiter_pos != std::string::npos) {
+            std::string key = line.substr(0, delimiter_pos);
+            std::string value = line.substr(delimiter_pos + 1);
             config[key] = value;
         }
     }
@@ -33,31 +30,27 @@ map<string, string> loadConfig(const string& filename) {
     return config;
 }
 
-sql::Connection* connectToDatabase() {
-  try {
-      // Load the configuration file
-      map<string, string> config = loadConfig("db_config.txt");
+// Establish the session and return a Session object
+Session* connectToDatabase() {
+    try {
+        // Load the configuration file
+        map<std::string, std::string> config = loadConfig("db_config.txt");
 
-      sql::mysql::MySQL_Driver *driver;
-      sql::Connection *con;
+        // Establish connection using the loaded config
+        Session* session = new Session(config["host"], stoi(config["port"]), config["user"], config["password"]);
+        session->sql("USE " + config["database"]).execute();  // Use the correct database
 
-      // Establish connection using the loaded config
-      driver = sql::mysql::get_mysql_driver_instance();
-      con = driver->connect("tcp://" + config["host"], config["user"], config["password"]);
-      con->setSchema(config["database"]);
+        return session;
 
-      return con;
-
-  } catch (sql::SQLException &e) {
-      cerr << "SQL Error: " << e.what() << endl;
-      exit(1);
-  }
-  return nullptr;
+    } catch (const Error &err) {
+        cerr << "Connection error: " << err << endl;
+        exit(1);
+    }
+    return nullptr;
 }
 
-
 // add
-void add( sql::Connection* con, const string item ) { 
+void add( Session* session, const std::string item ) { 
   cout << endl;
 
   if (item.empty()){
@@ -67,79 +60,64 @@ void add( sql::Connection* con, const string item ) {
 
   try{
     // Prepare the SQL statement
-    sql::PreparedStatement *pstmt;
-    pstmt = con->prepareStatement("INSERT INTO reminders (reminder_text) VALUES (?)");
+    session->sql("INSERT INTO reminders (reminder_text) VALUES (?)")
+      .bind(item)
+      .execute();
 
-    pstmt->setString(1, item);
-
-    pstmt->executeUpdate();
-
-    delete pstmt;
-  } catch (sql::SQLException &e) {
-    cerr << "SQL Error: " << e.what() << endl;
+    cout << "Added reminder: " << item << endl;
+  } catch (const Error &err) {
+    cerr << "SQL Error: " << err << endl;
   }
   cout << endl;
 }
 
 // remove
-void remove( sql::Connection* con, const int id = -1 ) { 
-  cout << endl;
+void remove(Session* session, const int id) {
+    cout << endl;
 
-  // if id is not provided
-  if(id == -1){
-    cout << "Please specify an id to remove." << endl << endl;
-    return;
-  }
-  try{
-    sql::PreparedStatement *pstmt;
-    // this is my attempt just from researching
-    pstmt = con->prepareStatement("DELETE FROM reminders WHERE id = ?");
-
-    pstmt->setInt(1, id);
-
-    int affectedRows = pstmt->executeUpdate();
-    if(affectedRows > 0){
-      cout << "Reminder with id " << id << " was successfully removed." << endl;
-    } else {
-      cout << "No reminder found with id " << id << endl;
+    if(id == -1){
+        cout << "Please specify a valid ID to remove." << endl << endl;
+        return;
     }
 
-    delete pstmt;
+    try {
+        // Execute the delete query
+        mysqlx::SqlResult result = session->sql("DELETE FROM reminders WHERE id = ?")
+                                .bind(id)
+                                .execute();
 
-  }catch(sql::SQLException &e){
-    cerr << "SQL Error: " << e.what() << endl;
-  } 
-  cout << endl;
+        if (result.getAffectedItemsCount() > 0) {
+            cout << "Removed reminder with id " << id << endl;
+        } else {
+            cout << "No reminder found with id " << id << endl;
+        }
+
+    } catch (const Error &err) {
+        cerr << "SQL Error: " << err << endl;
+    }
+    cout << endl;
 }
 
 // view
-void view( sql::Connection* con ) {
-  // Prepare the SQL statement
-  sql::PreparedStatement *pstmt;
-  pstmt = con->prepareStatement("SELECT id, reminder_text, due_date FROM reminders");
+void view(Session* session) {
+    try {
+        RowResult res = session->sql("SELECT id, reminder_text, due_date FROM reminders").execute();
 
-  sql::ResultSet* res = pstmt->executeQuery();
+        if (!res.count()) {
+            cout << "No reminders found." << endl;
+        } else {
+            cout << endl << "------ Reminders ------" << endl;
+            for (Row row : res) {
+                int id = row[0];
+                std::string reminder_text = row[1].get<std::string>();
+                cout << "Reminder: " << reminder_text << " | id: " << id << endl;
+            }
+        }
 
-  if(!res->next()){
-    cout << "No reminders found." << endl;
-  } else{
+    } catch (const Error &err) {
+        cerr << "SQL Error: " << err << endl;
+    }
     cout << endl;
-    cout << "------ Reminders ------" << endl;
-    do{
-
-      int id = res->getInt("id");
-      string reminder_text = res->getString("reminder_text");
-      string due_date = res->getString("due_date");
-      cout << "Reminder: " << reminder_text << " | id: " << id << endl;
-
-    } while(res->next());
-  }
-
-  // clean up resources
-  delete res;
-  delete pstmt;
-
-  cout << endl;
 }
 
 // quit
@@ -162,16 +140,16 @@ void welcomeMessage(){
   cout << "What would you like to do? Type help to see commands" << endl;
 }
 
-string toLowerCase(const string& str){
-  string lowerStr = str;
+std::string toLowerCase(const std::string& str){
+  std::string lowerStr = str;
   transform(lowerStr.begin(), lowerStr.end(), lowerStr.begin(), ::tolower);
   return lowerStr;
 }
 
-string trim(const string& str) {
+std::string trim(const std::string& str) {
   size_t firstNonSpace = str.find_first_not_of(' ');
   // trim leading
-  if(firstNonSpace == string::npos){
+  if(firstNonSpace == std::string::npos){
     return "";
   }
 
@@ -180,18 +158,18 @@ string trim(const string& str) {
   return str.substr(firstNonSpace, (lastNonSpace - firstNonSpace + 1));
 }
 
-void handleCommand(const string& input, unordered_map<string, function<void( const string& )>>& commands){
+void handleCommand(const std::string& input, unordered_map<std::string, function<void( const std::string& )>>& commands){
 
   if(input.empty()){
     return;
   }
 
-  string trimmedInput = trim(input);
+  std::string trimmedInput = trim(input);
 
-  string command, argument;
+  std::string command, argument;
   size_t spaceIndex = trimmedInput.find(' ');
 
-  if(spaceIndex != string::npos){
+  if(spaceIndex != std::string::npos){
     command = trimmedInput.substr(0, spaceIndex);
     argument = trimmedInput.substr(spaceIndex + 1);
   } else{
@@ -209,8 +187,8 @@ void handleCommand(const string& input, unordered_map<string, function<void( con
   }
 }
 
-void getCommandInput(unordered_map<string, function<void(const string&)>>& commands) {
-  string input;
+void getCommandInput(unordered_map<std::string, function<void(const std::string&)>>& commands) {
+  std::string input;
   while( true ){
     cout << "Enter command:";
     getline(cin, input);
@@ -221,34 +199,45 @@ void getCommandInput(unordered_map<string, function<void(const string&)>>& comma
 }
 
 void initPrompt() {
-  sql::Connection* con = connectToDatabase();
+  Session* session = connectToDatabase();
   welcomeMessage();
 
-  vector<string> shoppingList = { "Apples", "Bananas", "Peaches" };
+  vector<std::string> shoppingList = { "Apples", "Bananas", "Peaches" };
   
-  unordered_map<string, function<void(const string&)>> commands = {
-    {"add", [&con](const string& item) { add( con, item ); }},
-    {"help", [](const string&) { help(); }},
-    {"remove", [&con](const string& id_str) { 
+  unordered_map<std::string, function<void(const std::string&)>> commands = {
+    {"add", [&session](const std::string& item) { add( session, item ); }},
+    {"help", [](const std::string&) { help(); }},
+    {"remove", [&session](const std::string& id_str) { 
         try {
-            int id = stoi(id_str);  // Convert the string to an int
-            remove(con, id); 
+            int id = stoi(id_str);  // Convert the std::string to an int
+            remove(session, id); 
         } catch (const invalid_argument&) {
             cout << "Invalid ID format. Please enter a valid number." << endl;
         }
     }},
-    {"view", [&con](const string&) { view( con ); }},
-    {"quit", [](const string&) { quit(); }}
+    {"view", [&session](const std::string&) { view( session ); }},
+    {"quit", [](const std::string&) { quit(); }}
   };
   getCommandInput(commands);
 
-  if(con != nullptr){
-    delete con;
-    cout << "Database connection closed." << endl;
-  }
+  delete session;
+  cout << "Database connection closed." << endl;
 }
 
 int main() {
   initPrompt();
+
+  // try {
+  //     // Simplified connection
+  //     Session sess("104.248.226.236", 33060, "reminder_user", "Secure_Password123!!");
+  //     cout << "Connected successfully!" << endl;
+  //     sess.close();
+  // } catch (const mysqlx::Error &err) {
+  //     cerr << "Connection error: " << err.what() << endl;
+  // } catch (std::exception &ex) {
+  //     cerr << "STD Exception: " << ex.what() << endl;
+  // } catch (...) {
+  //     cerr << "Unknown exception caught!" << endl;
+  // }
   return 0;
 }

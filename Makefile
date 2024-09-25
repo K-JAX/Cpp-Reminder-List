@@ -1,7 +1,8 @@
 # Define variables for compiler, source file, and flags
 CXX = g++
-CXXFLAGS = -I/usr/include/mysql-cppconn/jdbc -std=c++11 -D_GLIBCXX_USE_CXX11_ABI=1
-LIBS = -lmysqlcppconn
+CXXFLAGS = -I/usr/include/mysql-cppconn -std=c++11
+#@LIBS = -lmysqlcppconn
+LIBS = -L/usr/lib64 -lmysqlcppconnx
 TARGET = reminder_app
 SRC = reminder_app.cpp
 
